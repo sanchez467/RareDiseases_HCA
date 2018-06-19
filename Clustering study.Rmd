@@ -1,0 +1,197 @@
+---
+title: "Hierarchical clustering applied in social networks about rare diseases"
+output: html_document
+---
+## Document owner: David Sanchez Lopez
+## R Version used: 3.4.4
+
+
+## Necessary packages to install in order to use needed transformations during all the processes
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install.packages("tm",repos='http://cran.es.r-project.org')
+#install.packages("slam",repos='http://cran.es.r-project.org')
+#install.packages("Rcpp",repos='http://cran.es.r-project.org')
+#install.packages("SnowballC",repos='http://cran.es.r-project.org')
+#install.packages("wordcloud",repos='http://cran.es.r-project.org')
+#install.packages("factoextra",repos='http://cran.es.r-project.org')
+#install.packages("dendextend",repos='http://cran.es.r-project.org')
+
+library(tm)
+library(slam)
+library(Rcpp)
+library(SnowballC)
+library(wordcloud)
+library(factoextra)
+library(dendextend)
+
+```
+
+
+```{r }
+## We will adjust the parametrization to avoid R interpret columns non numeric columns as factors, hence will be easier to work with texts
+
+
+options(stringsAsFactors = FALSE)
+
+route <- paste(getwd(),"/Facebook_Groups_Rare_Diseases_ENG.txt", sep = "")
+
+#Read all data files from Facebook
+
+dataset <- data.frame()
+source_file <- read.table(route, header = TRUE, encoding = "ANSII", sep="\t", fill=TRUE)
+
+dataset <- rbind(source_file, dataset)
+
+# For the moment only will be used the Facebook publication texts 
+
+
+```
+
+## Corpus creation
+
+```{r}
+
+posts_text.corpus <- Corpus(VectorSource(dataset$post_message))
+
+#Removing punctuation marks
+posts_text.corpus <- tm_map(posts_text.corpus, removePunctuation)
+#Removing whitespaces
+posts_text.corpus <- tm_map(posts_text.corpus, stripWhitespace)
+#Converting characters to lowercase
+posts_text.corpus <- tm_map(posts_text.corpus, content_transformer(tolower))
+
+#Apply stemming in corpus generation
+posts_text.corpus <- tm_map(posts_text.corpus, stemDocument, language="english")
+
+#Also suppress numeric terms
+posts_text.corpus <- tm_map(posts_text.corpus, removeNumbers)
+
+#Along all iterations of this investigation work, a list of stemmed stop-words has been build gathering those that are names, cities, countries or any other word that does not bring value in our dataset.
+
+custom_stop_words <- c("campo","garcia","julia","barcelona","esteban","facebookcom","gema","spain","higuera","noelia","topic","bueno","cuca","noguera","paulo","madrid","facebook","christma","diaz","juan","lopez","manuel","maria","murcia","valencia","jose","sanchez","rubio","ana","martinez","romero","colombia","sandra","argentina","david","rafa","totana","angel","casado","felix","mexico","postuser","fundacionsindromeporg","youtub","rosa","venezuela","youtubecom","pilar","alicant","panama","schvetz","carlo","fernandez","english","yolanda","martina","mari","fernando","catalunya","dolor","paramo","peÃ","tormo","aesvc","marfan","mundomarfanwordpresscom","gloria","pino","sima","aria","badaman","cabeza","cortÃ","maki","melixa","senati","aorta","slovenia","httpswwwfacebookcommarfansyndromslovenia","benidorm","spanish","moebius","wolfram")
+
+## The custom stopwords list will be used joined to the "english" stopwords default list such as prepositions, conjunctions, pronouns...
+## Our stopwords will be already stemmed to improve performance
+
+total_stw <- c(stemDocument(stopwords("english")), custom_stop_words)
+
+posts_text.corpus <- tm_map(posts_text.corpus, removeWords, total_stw)
+
+#Generate terms document matrix
+TDM <- TermDocumentMatrix(posts_text.corpus)
+
+#Reject words with length lower than 3
+#Reject words with length higher to 15, otherwise many URLs will be cosidered as terms
+TDM <- TermDocumentMatrix(posts_text.corpus, 
+       control = list(wordLengths = c(3, 15))) 
+
+dim(TDM)
+
+# Apply sparsity filter 
+TDM <- removeSparseTerms(TDM,0.985)
+
+# This reduces the Terms Document Matrix to a total of 270 terms which will be the most frequent and important ones
+dim(TDM)
+
+inspect(TDM[1:15,])
+
+```
+
+
+```{r}
+## Re-weigth word counts using the inverse document frequency 
+TFIDF <- weightTfIdf(TDM, normalize = FALSE)
+
+## Calculate euclidean distance using the previous Tf-dif calculated
+eu_dist <- dist(as.matrix(TFIDF), method="euclidean")
+
+```
+
+## Hierarchical Clustering 
+
+```{r}
+# Run hclust function with Euclidean distance calculated from tf-idf and Ward.D method
+hc <- hclust(eu_dist, "ward.D")
+
+plot(hc, sub = "", xlab = "")
+```
+
+```{r}
+## Visualize the optimal number of clusters for our dendogram by Total within sum of squares
+fviz_nbclust(as.data.frame(as.matrix(TDM)), hcut, method = "wss") +
+     geom_vline(xintercept = 3, linetype = 2)
+
+```
+
+```{r}
+clusters <- cutree(hc, 3)
+
+
+suppressWarnings(fviz_dend(hc, k = 3,
+          cex = 0.5, # label size
+          k_colors = c("#2E9FDF", "#FF00FF", "#E7B800"),
+          color_labels_by_k = TRUE, # color labels by groups
+          rect = TRUE, # Add rectangle around groups
+          rect_border = c("#2E9FDF", "#FF00FF", "#E7B800"), 
+          rect_fill = TRUE))
+
+```
+
+##To be precise, let's visualize using other point of view which words belong to each cluster
+
+```{r}
+# For each cluster build a matrix to calculate frequencies
+mat_c1 <- as.matrix(TDM[clusters == 1,])
+mat_c2 <- as.matrix(TDM[clusters == 2,])
+mat_c3 <- as.matrix(TDM[clusters == 3,])
+
+# Sort each cluster terms by frequencies
+freq_c1 <- sort(rowSums(mat_c1),decreasing=TRUE)
+freq_c2 <- sort(rowSums(mat_c2),decreasing=TRUE)
+freq_c3 <- sort(rowSums(mat_c3),decreasing=TRUE)
+
+# Generate frequencies dataframe
+df_c1 <- data.frame(word = names(freq_c1),freq=freq_c1)
+df_c2 <- data.frame(word = names(freq_c2),freq=freq_c2)
+df_c3 <- data.frame(word = names(freq_c3),freq=freq_c3)
+
+```
+
+## Cluster 1 terms
+```{r}
+
+wordcloud(words = df_c1$word, 
+           freq = df_c1$freq, 
+           max.words = 25, 
+           random.order = FALSE, 
+           colors = brewer.pal(8,"Dark2"),
+           main = "")  
+
+```
+
+## Cluster 2 terms
+```{r}
+
+wordcloud(words = df_c2$word, 
+           freq = df_c2$freq, 
+           max.words = 30, 
+           random.order = FALSE, 
+           colors = brewer.pal(8,"Dark2"),
+           main = "")  
+
+```
+
+## Cluster 3 terms
+```{r}
+
+wordcloud(words = df_c3$word, 
+           freq = df_c3$freq, 
+           max.words = 30, 
+           random.order = FALSE, 
+           colors = brewer.pal(8,"Dark2"),
+           main = "")  
+
+```
+
